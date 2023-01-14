@@ -192,41 +192,52 @@ def idCheck() -> list:
 
 
 def runScraper():
-    ids = idCheck()
-    with getHeadlessDriver() as driver:
-        waiter = WebDriverWait(driver, timeout=20)
-        fail_cnt = 0
-        for idx, id_ in enumerate(ids):
-            print(f"{idx+1}/{len(ids)}")
-            if fail_cnt >= 10:
-                print(f"too much failure, qutting")
-                return -1
+    running = True
+    while (running):
+        ids = idCheck()
+        with getHeadlessDriver() as driver:
+            waiter = WebDriverWait(driver, timeout=20)
+            fail_cnt = 0
+            succ_cnt = 0
+            for idx, id_ in enumerate(ids):
+                print(f"{idx+1}/{len(ids)}")
+                if fail_cnt >= 10:
+                    print(f"too much failure, qutting")
+                    return -1
 
-            if os.path.isfile(SAVE_DIR+f"\\{id_}.csv"):
-                print(f"{id_} exists, continuing")
-                continue
+                if os.path.isfile(SAVE_DIR+f"\\{id_}.csv"):
+                    print(f"{id_} exists, continuing")
+                    continue
 
-            print(f"scraping {id_}")
-            url = RIKISHI_URL.format(id_)
-            driver.get(url)
-            try:
-                waiter.until(ec.all_of(
-                    ec.url_to_be(url)
-                    , ec.presence_of_element_located(
-                        ("css selector", ".rikishi"))
-                ))
-            except TimeoutException:
-                print(f"Timed Out {id_}")
-                fail_cnt += 1
-                continue
+                print(f"scraping {id_}")
+                url = RIKISHI_URL.format(id_)
+                driver.get(url)
+                try:
+                    waiter.until(ec.all_of(
+                        ec.url_to_be(url)
+                        , ec.presence_of_element_located(
+                            ("css selector", ".rikishi"))
+                    ))
+                except TimeoutException:
+                    print(f"Timed Out {id_}")
+                    fail_cnt += 1
+                    continue
 
-            if (not scrapeRikishi(driver.page_source, id_, SAVE_DIR)):
-                print(f"{id_} failed")
-                fail_cnt += 1
-            else:
-                print(f"done {id_}")
-                fail_cnt = 0
+                if (not scrapeRikishi(driver.page_source, id_, SAVE_DIR)):
+                    print(f"{id_} failed")
+                    fail_cnt += 1
+                else:
+                    print(f"done {id_}")
+                    fail_cnt = 0
+                    succ_cnt += 1
 
+        print(f"Completed {succ_cnt} of {len(ids)}")
+        print(f"{len(ids) - succ_cnt} remaining")
+        usr_inp = ''
+        while (usr_inp not in ['y', 'n']):
+            usr_inp = input("Retry? Yes(y), No(n) ")
+        running = usr_inp == 'y'
+    print("Closing")
 
 def main():
     runScraper()

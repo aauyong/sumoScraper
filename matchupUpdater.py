@@ -11,7 +11,6 @@ from helpers import *
 from bs4 import BeautifulSoup as bs
 from bs4.element import Tag
 
-DRIVER_PAUSE = 10
 TORIKUMI_URL = "https://sumo.or.jp/EnHonbashoMain/torikumi/{}/{}/"
 SAVE_DEST =r"C:\Users\blarg\Documents\SQL Server Management Studio\SumoScripts\newMatchups.csv"
 
@@ -300,8 +299,8 @@ def main():
         args["days"], args["days_end"]))
     df = pd.DataFrame(data=data)
     df.to_csv(
-        SAVE_DEST,
-        index=False
+        SAVE_DEST
+        , index=False
     )
 
 

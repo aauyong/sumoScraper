@@ -1,5 +1,4 @@
 import  pandas  as  pd
-import  requests as req
 
 from bs4 import BeautifulSoup as bs
 from helpers import *
@@ -19,7 +18,6 @@ MAPPING = {
 }
 
 MASTER_URL = "http://sumodb.sumogames.de/Rikishi_opp.aspx?r={}"
-
 MU_HDRS = ["BASHO", "DAY", "OPP", "RESULT", "KIMARITE"]
 
 def getMatchup(pg_src:str, id:int, directory:str) -> bool:

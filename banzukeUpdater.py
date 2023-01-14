@@ -1,8 +1,10 @@
 import datetime as dt
 import pandas as pd
+import os
 import sys
 
-from helpers import *
+import helpers
+
 from pathlib import Path
 from selenium import webdriver
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException, NoSuchElementException
@@ -15,7 +17,7 @@ from bs4 import BeautifulSoup as bs, Tag
 
 BANZUKE_URL = "https://sumo.or.jp/EnHonbashoBanzuke/index/"
 PROFILE_URL = "https://sumo.or.jp/EnSumoDataRikishi/profile/{}/"
-SAVE_DESTINATION = r"C:\Users\blarg\Documents\SQL Server Management Studio\SumoScripts\newBasho.csv"
+SAVE_DEST = r"C:\Users\blarg\Documents\SQL Server Management Studio\SumoScripts\newBasho.csv"
 DIV_MAP = {"M": 1, "J": 2, "Ms": 3, "Sd": 4, "Jd": 5, "Jk": 6}
 
 BANZUKE_DICT = {
@@ -23,6 +25,7 @@ BANZUKE_DICT = {
 }
 
 PROFILE_DICT = {
+    "jsa_id": None,
     "hatsu": None,
     "intai": None,
     "full_shikona": None,
@@ -38,11 +41,26 @@ PROFILE_DICT = {
 PROFILE_HDRS = list(PROFILE_DICT.keys())
 
 SYS_ARGS = {
-    "write_option": 'w'
+    "write_option": 'w',
+    "retry": False
 }
 
-TEMP_BANZUKE = r".\tempBanzData.csv"
-TEMP_PROFILE = r".\tempProfileData.csv"
+EXPECTED_KEYWORDS = [
+    None,
+    "append",
+    "a",
+    "retry"
+]
+
+EXPECTED_OPTIONS = {
+    None
+}
+
+COMMAND_LINE_USAGE_MSG = "Usage :: python banzukeUpdater.py [[--retry] [--append | --a]]"
+
+TEMP_BANZUKE = r".\temp\tempBanzData.csv"
+TEMP_PROFILE = r".\temp\tempProfileData.csv"
+
 
 def downloadBanzuke(write_option: str = 'w') -> pd.DataFrame:
     """***************************************************************************
@@ -65,21 +83,24 @@ def downloadBanzuke(write_option: str = 'w') -> pd.DataFrame:
 
     data = list()
     try:
-        with getHeadlessDriver(BANZUKE_URL) as banzuke_driver:
+        with helpers.getHeadlessDriver(BANZUKE_URL) as banzuke_driver:
             for key in filtered_div_map.keys():
                 print(f"Parsing the {key} page")
                 data.extend(scrapeBanzuke(banzuke_driver, key))
     except Exception as e:
         print(e)
     finally:
-        if len(data) == 0:
+        if len(data) == 0 and os.path.exists(TEMP_BANZUKE):
             return pd.read_csv(TEMP_BANZUKE)
 
         df = pd.DataFrame(data=data)
         df.drop_duplicates(inplace=True)
-        df[PROFILE_HDRS] = None
+
+        df[ [x for x in PROFILE_HDRS if x not in df.columns]  ] = None
         df.to_csv(TEMP_BANZUKE, index=False,
-                  mode=write_option, header=(write_option != 'a'))
+                    mode=write_option, header=(write_option != 'a'))
+
+
     if write_option == 'a':
         df = pd.concat([append_df, df])
     return df
@@ -214,6 +235,8 @@ def scrapeBanzuke(driver: webdriver, division: str) -> list:
                     east_rank = f"{east_data['rank_name']}{east_data['pos']}{east_data['side']}"
                     if east_rank in rank_map:
                         east_data['other'] = "TD"
+                    else:
+                        east_data['other'] = ' '
                     rank_map.add(east_rank)
                     page_data.append(east_data)
 
@@ -224,6 +247,8 @@ def scrapeBanzuke(driver: webdriver, division: str) -> list:
                     west_rank = f"{west_data['rank_name']}{west_data['pos']}{west_data['side']}"
                     if west_rank in rank_map:
                         west_data['other'] = "TD"
+                    else:
+                        west_data['other'] = ' '
                     rank_map.add(west_rank)
                     page_data.append(west_data)
 
@@ -235,7 +260,7 @@ def scrapeBanzuke(driver: webdriver, division: str) -> list:
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-def downloadProfiles(write_option: str, toDo_ids: set) -> pd.DataFrame:
+def downloadProfiles(write_option: str, toDo_ids: set, retry:bool = False) -> pd.DataFrame:
     """***************************************************************************
 
 
@@ -249,13 +274,12 @@ def downloadProfiles(write_option: str, toDo_ids: set) -> pd.DataFrame:
     finished_ids = []
     if write_option == 'a':
         append_df = pd.read_csv(TEMP_PROFILE)
-        finished_ids = append_df.dropna(subset='full_shikona')[
-            'jsa_id'].unique()
+        finished_ids = append_df.dropna(subset='full_shikona')['jsa_id'].unique()
 
-    for id_ in finished_ids:
-        toDo_ids.remove(id_)
+    toDo_ids.difference_update(set(finished_ids))
+
     try:
-        with getHeadlessDriver(None) as driver:
+        with helpers.getHeadlessDriver() as driver:
             profile_data = parseProfiles(driver, toDo_ids)
     except Exception as e:
         print(e)
@@ -266,7 +290,14 @@ def downloadProfiles(write_option: str, toDo_ids: set) -> pd.DataFrame:
 
     if write_option == 'a':
         prof_df = pd.concat([append_df, prof_df])
-    return prof_df
+
+    toDo_ids.difference_update(set(prof_df['jsa_id'].unique()))
+
+    if (len(toDo_ids) == 0 or not retry):
+        return prof_df
+    else:
+        print("Retrying profile download")
+        return downloadProfiles(write_option, toDo_ids, retry)
 # END OF sca
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -354,6 +385,7 @@ def getProfileData(page_source: str, jsa_id: int) -> dict:
     is_new = int(is_new)
 
     return {
+        "jsa_id": jsa_id,
         "hatsu": hatsu,
         "intai": intai,
         "full_shikona": full_shikona,
@@ -388,7 +420,7 @@ def parseProfiles(driver: webdriver.Firefox, jsa_ids: list) -> list:
         for idx, id in enumerate(jsa_ids):
             print(f"{id}: Parsing Profile {idx+1}/{len(jsa_ids)}")
 
-            MAX_ERROR = 10
+            MAX_ERROR = 3
             error_cnt = 0
             driver.get(PROFILE_URL.format(id))
             for _ in range(MAX_ERROR):
@@ -399,7 +431,7 @@ def parseProfiles(driver: webdriver.Firefox, jsa_ids: list) -> list:
                     driver.get(PROFILE_URL.format(id))
                     error_cnt += 1
 
-            if error_cnt >= 9:
+            if error_cnt >= MAX_ERROR:
                 errors.append(f"{id}\n")
             else:
                 WebDriverWait(driver, timeout=30).until(
@@ -417,7 +449,7 @@ def parseProfiles(driver: webdriver.Firefox, jsa_ids: list) -> list:
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-def consolidateWithSumoDB(df: pd.DataFrame) -> pd.DataFrame:
+def consolidateWithSumoDB(df: pd.DataFrame) ->  pd.DataFrame:
     """***************************************************************************
 
     Consolidate profiles pulled from the Sumo website with the sumodb. In
@@ -430,7 +462,7 @@ def consolidateWithSumoDB(df: pd.DataFrame) -> pd.DataFrame:
     * Dataframe with ID column
     ***************************************************************************"""
     soup = None
-    with getHeadlessDriver(r"http://sumodb.sumogames.de/Banzuke.aspx") as driver:
+    with helpers.getHeadlessDriver(r"http://sumodb.sumogames.de/Banzuke.aspx") as driver:
         WebDriverWait(driver, timeout=30).until(
             ec.url_matches(r"http://sumodb.sumogames.de/Banzuke.aspx"))
         soup = bs(driver.page_source, 'html.parser')
@@ -458,57 +490,49 @@ def consolidateWithSumoDB(df: pd.DataFrame) -> pd.DataFrame:
 # END OF consolidateWithSumoDB
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-
-def readErrors() -> None:
+def handleSysArgs():
     """***************************************************************************
 
+    Handle System Arguments for the local file with the use of the helpers
+    lib. Parses the system arguments, validates them, and then handles them
+    accordingly.
 
+    Utilizies globals {EXPECTED_KEYWORDS}, {EXPECTED_OPTIONS}, and
+    {COMMAND_LINE_USAGE_MSG} to validate and print out an error message to the
+    user if validation fails or arguments themselves fail
 
-    ### Parameters ###
-    *
-
-    ### Return ###
-    *
     ***************************************************************************"""
-    error_ids = set()
-    with open("error_log.txt", 'r') as f:
-        for line in f.readlines():
-            error_ids.add(line.lstrip().rstrip())
+    kywrd_args, optns = helpers.parseSysArgs(sys.argv)
+    helpers.validateSysArgs(kywrd_args, optns, EXPECTED_KEYWORDS,
+                            EXPECTED_OPTIONS, COMMAND_LINE_USAGE_MSG)
 
-    data = list()
-    with getHeadlessDriver() as driver:
-        data = parseProfiles(driver, error_ids)
+    if kywrd_args:
+        if "append" in kywrd_args or 'a' in kywrd_args:
+            SYS_ARGS['write_option'] = 'a'
+            if not Path(TEMP_PROFILE).exists():
+                raise FileNotFoundError(f"Trying to append to {TEMP_PROFILE} fails\
+                    as it does not exist. Try rerunning with --Write or no write\
+                    argument")
 
-    if len(data) <= 0:
-        return -1
-
-    err_data = pd.DataFrame(data=data)
-    mstrdf = pd.read_csv(SAVE_DESTINATION)
-    print()
-# END OF readErrors
+        if "retry" in kywrd_args:
+            SYS_ARGS["retry"] = True
+# END OF handleSysArgs
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] == 'a':
-        SYS_ARGS['write_option'] = sys.argv[1]
-        try:
-            open(TEMP_PROFILE, 'r')
-        except FileNotFoundError as e:
-            print(e)
-            return 1
-    if len(sys.argv) > 1 and sys.argv[1] == 'read_errors':
-        readErrors()
-        return 0
+    handleSysArgs()
 
     banz_df = downloadBanzuke(SYS_ARGS['write_option'])
     print("PARSING PROFILE DATA")
     prof_df = downloadProfiles(
-        SYS_ARGS['write_option'], set(banz_df['jsa_id'].unique()))
+        SYS_ARGS['write_option'],
+        set(banz_df['jsa_id'].unique()),
+        SYS_ARGS["retry"]
+    )
 
-    mstrdf = banz_df.set_index('jsa_id')
-    mstrdf.update(prof_df.set_index('jsa_id'))
-    mstrdf = mstrdf.reset_index()
+    mstrdf = banz_df.set_index('jsa_id')\
+                .update(prof_df.set_index('jsa_id'))\
+                .reset_index()
 
     mstrdf["birth_date"] = pd.to_datetime(mstrdf["birth_date"])
     now = dt.datetime.now()
@@ -522,13 +546,17 @@ def main():
 
     consolidateWithSumoDB(mstrdf)
 
-    mstrdf = mstrdf.convert_dtypes()
-    mstrdf.to_csv(
-        SAVE_DESTINATION,
-        index=False
-    )
-    os.remove(TEMP_BANZUKE)
-    os.remove(TEMP_PROFILE)
+    mstrdf.convert_dtypes()\
+        .to_csv( SAVE_DEST, index=False )
+
+    user_res = ""
+    while (not user_res in ['Y', 'N']):
+        user_res = input("Remove Temporary files? Y/N : ").upper()
+        if user_res == 'Y':
+            os.remove(TEMP_BANZUKE)
+            os.remove(TEMP_PROFILE)
+        elif user_res == 'N':
+            break
     return 0
 
 if __name__ == "__main__":

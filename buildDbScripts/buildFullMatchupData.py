@@ -2,8 +2,7 @@ import pandas   as pd
 
 from pathlib import Path
 
-def division(rank_name:str):
-    d = {
+DIV_MAP = {
         'Y':1
         ,'S':1
         ,'O':1
@@ -15,7 +14,6 @@ def division(rank_name:str):
         ,'Jd':5
         ,'Jk':6
     }
-    return d.get(rank_name, 7)
 
 directory = r'.\matchupData'
 data = Path(directory)
@@ -39,26 +37,23 @@ else:
     mstrdf = pd.read_csv(r".\fullMatchups.csv")
 
 iddf = pd.read_csv(r".\fullResults.csv")
-iddf = iddf.set_index("RESULT_ID")
-mstrdf['RESULT_ID'] = mstrdf['ID'].astype(str) + '.' + mstrdf['BASHO'].astype(str)
-mstrdf = mstrdf.set_index("RESULT_ID")
 
-# mstrdf = mstrdf.join(iddf[['SHIKONA', 'NAME', 'RANK_NAME','POS','SIDE']])
-mstrdf = mstrdf.join(iddf[['RANK_NAME','POS','SIDE']])
-# mstrdf['IDRANK'] = mstrdf['RANK_NAME'] + mstrdf['POS'].convert_dtypes().astype(str) + mstrdf['SIDE']
-mstrdf['DIVID'] = mstrdf['RANK_NAME'].apply(division)
-mstrdf.drop(columns=['RANK_NAME', 'POS', 'SIDE'],inplace=True)
-mstrdf.reset_index(drop=True, inplace=True)
+def foo(df:pd.DataFrame, iddf:pd.DataFrame, id_col:str, rank_col:str):
+    """Using a {id_col} key, join dataframes on the key column and
+    the pull the RANK_NAME column from the {iddf}. Apply the DIV_MAP
+    to the rank_name column and store it in the {rank_col} column"""
 
-mstrdf['OPP_RESULT_ID'] = mstrdf['OPP'].astype(str) + '.' + mstrdf['BASHO'].astype(str)
-mstrdf = mstrdf.set_index("OPP_RESULT_ID")
+    df[id_col] = df['ID'].astype(str) + '.' + df['BASHO'].astype(str)
+    df = df.set_index(id_col)
+    iddf = iddf.set_index(id_col)
 
-# mstrdf = mstrdf.join(iddf[['SHIKONA', 'NAME', 'RANK_NAME','POS','SIDE']], rsuffix="_OPP")
-mstrdf = mstrdf.join(iddf[['RANK_NAME','POS','SIDE']], rsuffix="_OPP")
-# mstrdf['OPPRANK'] = mstrdf['RANK_NAME'] + mstrdf['POS'].convert_dtypes().astype(str) + mstrdf['SIDE']
-mstrdf['DIVOPP'] = mstrdf['RANK_NAME'].apply(division)
-mstrdf.drop(columns=['RANK_NAME', 'POS', 'SIDE'],inplace=True)
-mstrdf.reset_index(drop=True, inplace=True)
+    df = df.join(iddf['RANK_NAME'])
+    df[rank_col] = df['RANK_NAME'].apply(lambda x : DIV_MAP.get(x, 7))
+    df.drop(columns=['RANK_NAME'],inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+foo(mstrdf, iddf, 'RESULT_ID', 'DIVID')
+foo(mstrdf, iddf, 'OPP_RESULT_ID', 'DIVOPP')
 
 mstrdf['DIVISION'] = mstrdf[['DIVID', 'DIVOPP']].max(axis=1)
 mstrdf.drop(columns=['DIVID', 'DIVOPP'],inplace=True)
